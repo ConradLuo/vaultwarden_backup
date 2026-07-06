@@ -22,15 +22,7 @@ jobs:
 
     steps:
       - name: ⬇️ Checkout Scripts Repository
-        uses: actions/checkout@v4
-
-      - name: ⬇️ Checkout Data Repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.DATA_REPOSITORY }}
-          token: ${{ env.PAT_TOKEN }}
-          path: 'data'
-          persist-credentials: true
+        uses: actions/checkout@v5
 
       - name: ⚙️ Pre-check Configuration
         run: |
@@ -75,118 +67,24 @@ jobs:
 
           echo "Will save to: $TARGET_PATH"
 
+      - name: ⬇️ Checkout Data Repository (Sparse Checkout)
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.DATA_REPOSITORY }}
+          token: ${{ env.PAT_TOKEN }}
+          path: 'data'
+          persist-credentials: true
+          fetch-depth: 1
+          sparse-checkout: |
+            ${{ env.FULL_OUTPUT_DIR }}
+
       - name: 📂 Create Download Directory (YYYY/MM)
         run: |
           set -euo pipefail
           mkdir -p "data/${{ env.FULL_OUTPUT_DIR }}"
 
       - name: 📥 Download File (ZIP format) with retry and validation
-        shell: python
-        run: |
-          import os
-          import sys
-          import urllib.request
-          import urllib.error
-          from urllib.parse import urlparse, urlunparse
-          import zipfile
-          import time
-
-          download_url = os.environ.get("DOWNLOAD_URL", "")
-          target_path = "data/" + os.environ.get("TARGET_PATH", "")
-          tmp_file = target_path + ".tmp"
-
-          # 脱敏 URL 以防日志泄露
-          def get_redacted_url(url):
-              try:
-                  parsed = urlparse(url)
-                  if parsed.query:
-                      return urlunparse(parsed._replace(query="token=***"))
-                  return url
-              except Exception:
-                  return "Redacted URL"
-
-          redacted_url = get_redacted_url(download_url)
-          print(f"Downloading from: {redacted_url}")
-
-          # 下载重试逻辑
-          max_retries = 3
-          retry_delay = 5
-          success = False
-
-          # 构造 Request 并添加 User-Agent 避免部分服务器 (如 Nginx/Cloudflare) 拦截 Python 默认头
-          req = urllib.request.Request(
-              download_url,
-              headers={
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-              }
-          )
-
-          for attempt in range(1, max_retries + 1):
-              try:
-                  with urllib.request.urlopen(req, timeout=60) as response:
-                      with open(tmp_file, "wb") as out_file:
-                          out_file.write(response.read())
-                  success = True
-                  break
-              except urllib.error.URLError as e:
-                  print(f"Attempt {attempt} failed: {e}")
-                  if attempt < max_retries:
-                      time.sleep(retry_delay)
-              except Exception as e:
-                  print(f"Attempt {attempt} failed with unexpected error: {e}")
-                  if attempt < max_retries:
-                      time.sleep(retry_delay)
-
-          if not success:
-              print(f"Error: Failed to download file from {redacted_url} after {max_retries} attempts.")
-              sys.exit(1)
-
-          if not os.path.exists(tmp_file) or os.path.getsize(tmp_file) == 0:
-              print("Error: Download produced an empty or non-existent file.")
-              if os.path.exists(tmp_file):
-                  os.remove(tmp_file)
-              sys.exit(1)
-
-          # 验证 ZIP 包完整性
-          print("Verifying ZIP file integrity...")
-          try:
-              with zipfile.ZipFile(tmp_file) as zf:
-                  bad_file = zf.testzip()
-                  if bad_file is not None:
-                      print(f"Error: Corrupt file inside ZIP: {bad_file}")
-                      os.remove(tmp_file)
-                      sys.exit(1)
-          except zipfile.BadZipFile:
-              print("Error: Downloaded file is not a valid ZIP archive.")
-              os.remove(tmp_file)
-              sys.exit(1)
-
-          print("ZIP file integrity verification passed.")
-
-          # SHA256 比较去重
-          import hashlib
-          def get_sha256(filepath):
-              h = hashlib.sha256()
-              with open(filepath, "rb") as f:
-                  for chunk in iter(lambda: f.read(65536), b""):
-                      h.update(chunk)
-              return h.hexdigest()
-
-          if os.path.exists(target_path):
-              new_sum = get_sha256(tmp_file)
-              old_sum = get_sha256(target_path)
-              if new_sum == old_sum:
-                  print(f"Downloaded file identical to existing {target_path} — skipping move and commit.")
-                  os.remove(tmp_file)
-                  with open(os.environ['GITHUB_ENV'], 'a') as ge:
-                      ge.write("SKIP_COMMIT=true\n")
-                  sys.exit(0)
-
-          # 覆盖目标文件
-          if os.path.exists(target_path):
-              os.remove(target_path)
-          os.rename(tmp_file, target_path)
-          print(f"Saved to {target_path}")
+        run: python scripts/download_backup.py
 
       - name: 💾 Commit and Push Changes (only if changed)
         run: |

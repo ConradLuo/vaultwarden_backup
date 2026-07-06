@@ -36,7 +36,7 @@ jobs:
 
     steps:
       - name: ⬇️ Checkout Scripts Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: ⚙️ Pre-check Configuration
         run: |
@@ -53,12 +53,13 @@ jobs:
           echo "配置检查通过。"
 
       - name: ⬇️ Checkout Data Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ env.DATA_REPOSITORY }}
           token: ${{ env.PAT_TOKEN }}
           path: 'data'
           persist-credentials: true
+          fetch-depth: 1
 
       - name: Make script executable
         run: chmod +x scripts/archive_monthly.sh
