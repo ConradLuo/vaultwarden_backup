@@ -71,7 +71,7 @@
 3. **在脚本仓库中设置 Secrets**：
    转到本脚本仓库 -> `Settings` -> `Secrets and variables` -> `Actions`。
    - **Secrets (机密信息)** 选项卡中，点击 `New repository secret` 添加：
-     - `DOWNLOAD_URL`：您的固定下载链接（例如: `https://my-nas.com/backup.zip?token=...`）
+     - `DOWNLOAD_URL`：您的固定下载链接（例如: `https://my-nas.com/vaultwarden_backup/vaultwarden.zip` 或带 Token 的链接）
      - `PAT_TOKEN`：刚才生成的 PAT 密钥
      - `DATA_REPOSITORY`：您的私有数据仓库路径（例如: `ConradLuo/vaultwarden_backup_data`）
      - `ORIGINAL_FILENAME`：备份压缩包在仓库中存储的基础文件名（选填，默认为 `vaultwarden`）
