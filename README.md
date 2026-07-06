@@ -68,12 +68,11 @@
    - 访问 GitHub [Personal Access Tokens (Classic)](https://github.com/settings/tokens)。
    - 生成一个具有 `repo` 权限的 Classic Token，供 Actions 读写您的私有数据仓。
 
-3. **在脚本仓库中设置 Secrets & Variables**：
+3. **在脚本仓库中设置 Secrets**：
    转到本脚本仓库 -> `Settings` -> `Secrets and variables` -> `Actions`。
    - **Secrets (机密信息)** 选项卡中，点击 `New repository secret` 添加：
      - `DOWNLOAD_URL`：您的固定下载链接（例如: `https://my-nas.com/backup.zip?token=...`）
      - `PAT_TOKEN`：刚才生成的 PAT 密钥
-   - **Variables (环境变量)** 选项卡中，点击 `New repository variable` 添加：
      - `DATA_REPOSITORY`：您的私有数据仓库路径（例如: `ConradLuo/vaultwarden_backup_data`）
      - `ORIGINAL_FILENAME`：备份压缩包在仓库中存储的基础文件名（选填，默认为 `vaultwarden`）
 

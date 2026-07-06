@@ -16,6 +16,9 @@ jobs:
       contents: write
     env:
       DOWNLOAD_URL: ${{ secrets.DOWNLOAD_URL }}
+      DATA_REPOSITORY: ${{ secrets.DATA_REPOSITORY }}
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      ORIGINAL_FILENAME: ${{ secrets.ORIGINAL_FILENAME || 'vaultwarden' }}
 
     steps:
       - name: ⬇️ Checkout Scripts Repository
@@ -24,8 +27,8 @@ jobs:
       - name: ⬇️ Checkout Data Repository
         uses: actions/checkout@v4
         with:
-          repository: ${{ vars.DATA_REPOSITORY }}
-          token: ${{ secrets.PAT_TOKEN }}
+          repository: ${{ env.DATA_REPOSITORY }}
+          token: ${{ env.PAT_TOKEN }}
           path: 'data'
           persist-credentials: true
 
@@ -33,16 +36,16 @@ jobs:
         run: |
           set -euo pipefail
           echo "Checking environment variables..."
-          if [ -z "${{ env.DOWNLOAD_URL }}" ]; then
+          if [ -z "${DOWNLOAD_URL:-}" ]; then
             echo "错误: 未配置 secrets.DOWNLOAD_URL" >&2
             exit 1
           fi
-          if [ -z "${{ vars.DATA_REPOSITORY }}" ]; then
-            echo "错误: 未配置 vars.DATA_REPOSITORY" >&2
+          if [ -z "${DATA_REPOSITORY:-}" ]; then
+            echo "错误: 未配置 secrets.DATA_REPOSITORY (当前获取为空)" >&2
             exit 1
           fi
-          if [ -z "${{ secrets.PAT_TOKEN }}" ]; then
-            echo "错误: 未配置 secrets.PAT_TOKEN" >&2
+          if [ -z "${PAT_TOKEN:-}" ]; then
+            echo "错误: 未配置 secrets.PAT_TOKEN (当前获取为空)" >&2
             exit 1
           fi
           echo "配置检查通过。"
@@ -52,7 +55,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "${{ env.DOWNLOAD_URL }}" ]; then
+          if [ -z "${DOWNLOAD_URL:-}" ]; then
             echo "DOWNLOAD_URL is empty. Exiting."
             exit 1
           fi
@@ -63,7 +66,6 @@ jobs:
           CURRENT_DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d')
 
           FULL_OUTPUT_DIR="${YEAR}/${MONTH}"
-          ORIGINAL_FILENAME="${{ vars.ORIGINAL_FILENAME || 'vaultwarden' }}"
           NEW_FILENAME="${ORIGINAL_FILENAME}_${CURRENT_DATE}.zip"
           TARGET_PATH="${FULL_OUTPUT_DIR}/${NEW_FILENAME}"
 
