@@ -1,0 +1,216 @@
+name: Daily Download and Commit (Archived)
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  download_and_commit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      DOWNLOAD_URL: ${{ secrets.DOWNLOAD_URL }}
+
+    steps:
+      - name: ⬇️ Checkout Scripts Repository
+        uses: actions/checkout@v4
+
+      - name: ⬇️ Checkout Data Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.DATA_REPOSITORY }}
+          token: ${{ secrets.PAT_TOKEN }}
+          path: 'data'
+          persist-credentials: true
+
+      - name: ⚙️ Pre-check Configuration
+        run: |
+          set -euo pipefail
+          echo "Checking environment variables..."
+          if [ -z "${{ env.DOWNLOAD_URL }}" ]; then
+            echo "错误: 未配置 secrets.DOWNLOAD_URL" >&2
+            exit 1
+          fi
+          if [ -z "${{ vars.DATA_REPOSITORY }}" ]; then
+            echo "错误: 未配置 vars.DATA_REPOSITORY" >&2
+            exit 1
+          fi
+          if [ -z "${{ secrets.PAT_TOKEN }}" ]; then
+            echo "错误: 未配置 secrets.PAT_TOKEN" >&2
+            exit 1
+          fi
+          echo "配置检查通过。"
+
+      - name: ⚙️ Set up Dynamic Paths and Filename
+        id: setup
+        run: |
+          set -euo pipefail
+
+          if [ -z "${{ env.DOWNLOAD_URL }}" ]; then
+            echo "DOWNLOAD_URL is empty. Exiting."
+            exit 1
+          fi
+
+          # 使用北京时间 (Asia/Shanghai)
+          YEAR=$(TZ='Asia/Shanghai' date +'%Y')
+          MONTH=$(TZ='Asia/Shanghai' date +'%m')
+          CURRENT_DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d')
+
+          FULL_OUTPUT_DIR="${YEAR}/${MONTH}"
+          ORIGINAL_FILENAME="${{ vars.ORIGINAL_FILENAME || 'vaultwarden' }}"
+          NEW_FILENAME="${ORIGINAL_FILENAME}_${CURRENT_DATE}.zip"
+          TARGET_PATH="${FULL_OUTPUT_DIR}/${NEW_FILENAME}"
+
+          echo "FULL_OUTPUT_DIR=$FULL_OUTPUT_DIR" >> $GITHUB_ENV
+          echo "NEW_FILENAME=$NEW_FILENAME" >> $GITHUB_ENV
+          echo "TARGET_PATH=$TARGET_PATH" >> $GITHUB_ENV
+
+          echo "Will save to: $TARGET_PATH"
+
+      - name: 📂 Create Download Directory (YYYY/MM)
+        run: |
+          set -euo pipefail
+          mkdir -p "data/${{ env.FULL_OUTPUT_DIR }}"
+
+      - name: 📥 Download File (ZIP format) with retry and validation
+        shell: python
+        run: |
+          import os
+          import sys
+          import urllib.request
+          import urllib.error
+          from urllib.parse import urlparse, urlunparse
+          import zipfile
+          import time
+
+          download_url = os.environ.get("DOWNLOAD_URL", "")
+          target_path = "data/" + os.environ.get("TARGET_PATH", "")
+          tmp_file = target_path + ".tmp"
+
+          # 脱敏 URL 以防日志泄露
+          def get_redacted_url(url):
+              try:
+                  parsed = urlparse(url)
+                  if parsed.query:
+                      return urlunparse(parsed._replace(query="token=***"))
+                  return url
+              except Exception:
+                  return "Redacted URL"
+
+          redacted_url = get_redacted_url(download_url)
+          print(f"Downloading from: {redacted_url}")
+
+          # 下载重试逻辑
+          max_retries = 3
+          retry_delay = 5
+          success = False
+
+          for attempt in range(1, max_retries + 1):
+              try:
+                  with urllib.request.urlopen(download_url, timeout=60) as response:
+                      with open(tmp_file, "wb") as out_file:
+                          out_file.write(response.read())
+                  success = True
+                  break
+              except urllib.error.URLError as e:
+                  print(f"Attempt {attempt} failed: {e}")
+                  if attempt < max_retries:
+                      time.sleep(retry_delay)
+              except Exception as e:
+                  print(f"Attempt {attempt} failed with unexpected error: {e}")
+                  if attempt < max_retries:
+                      time.sleep(retry_delay)
+
+          if not success:
+              print(f"Error: Failed to download file from {redacted_url} after {max_retries} attempts.")
+              sys.exit(1)
+
+          if not os.path.exists(tmp_file) or os.path.getsize(tmp_file) == 0:
+              print("Error: Download produced an empty or non-existent file.")
+              if os.path.exists(tmp_file):
+                  os.remove(tmp_file)
+              sys.exit(1)
+
+          # 验证 ZIP 包完整性
+          print("Verifying ZIP file integrity...")
+          try:
+              with zipfile.ZipFile(tmp_file) as zf:
+                  bad_file = zf.testzip()
+                  if bad_file is not None:
+                      print(f"Error: Corrupt file inside ZIP: {bad_file}")
+                      os.remove(tmp_file)
+                      sys.exit(1)
+          except zipfile.BadZipFile:
+              print("Error: Downloaded file is not a valid ZIP archive.")
+              os.remove(tmp_file)
+              sys.exit(1)
+
+          print("ZIP file integrity verification passed.")
+
+          # SHA256 比较去重
+          import hashlib
+          def get_sha256(filepath):
+              h = hashlib.sha256()
+              with open(filepath, "rb") as f:
+                  for chunk in iter(lambda: f.read(65536), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          if os.path.exists(target_path):
+              new_sum = get_sha256(tmp_file)
+              old_sum = get_sha256(target_path)
+              if new_sum == old_sum:
+                  print(f"Downloaded file identical to existing {target_path} — skipping move and commit.")
+                  os.remove(tmp_file)
+                  with open(os.environ['GITHUB_ENV'], 'a') as ge:
+                      ge.write("SKIP_COMMIT=true\n")
+                  sys.exit(0)
+
+          # 覆盖目标文件
+          if os.path.exists(target_path):
+              os.remove(target_path)
+          os.rename(tmp_file, target_path)
+          print(f"Saved to {target_path}")
+
+      - name: 💾 Commit and Push Changes (only if changed)
+        run: |
+          set -euo pipefail
+
+          if [ "${{ env.SKIP_COMMIT || 'false' }}" = "true" ]; then
+            echo "No changes to commit. Skipping."
+            exit 0
+          fi
+
+          cd data
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          FILE_PATH="${{ env.TARGET_PATH }}"
+
+          # 获取元数据信息用于 Commit 信息中
+          FILE_SIZE_BYTES=$(wc -c < "$FILE_PATH")
+          if [ "$FILE_SIZE_BYTES" -ge 1048576 ]; then
+            FILE_SIZE=$(echo "$FILE_SIZE_BYTES" | awk '{printf "%.2f MB", $1/1048576}')
+          else
+            FILE_SIZE=$(echo "$FILE_SIZE_BYTES" | awk '{printf "%.2f KB", $1/1024}')
+          fi
+          SHA256_SUM=$(sha256sum "$FILE_PATH" | awk '{print $1}')
+
+          # 添加文件并仅当仓库有变化时提交
+          git add "$FILE_PATH" || true
+
+          if ! git diff-index --quiet HEAD --; then
+            git commit -m "feat(daily): Add or update $FILE_PATH" \
+                       -m "- File Size: $FILE_SIZE" \
+                       -m "- SHA256: $SHA256_SUM"
+            git push
+            echo "Changes pushed."
+          else
+            echo "No changes to commit."
+          fi

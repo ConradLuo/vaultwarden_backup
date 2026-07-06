@@ -1,0 +1,11 @@
+# 自动规范换行符
+* text=auto
+
+# 对脚本和 workflow 强制使用 LF
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# 保留二进制文件原样
+*.zip binary
+*.7z binary

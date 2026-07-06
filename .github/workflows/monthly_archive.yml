@@ -1,0 +1,94 @@
+name: Monthly Archive Backups
+
+permissions:
+  contents: write
+
+on:
+  # 若要开启自动定时归档，请取消下方 schedule 段落的注释：
+  # schedule:
+  #   # 每月1号和16号 04:00 UTC (12:00 BJT) 运行
+  #   - cron: '0 4 1,16 * *'
+  workflow_dispatch:
+    inputs:
+      year:
+        description: 'Year to archive (optional, e.g. 2026)'
+        required: false
+        default: ''
+      month:
+        description: 'Month to archive (optional, e.g. 05)'
+        required: false
+        default: ''
+      part:
+        description: 'Part to archive (optional: "01-15" or "16-end")'
+        required: false
+        default: ''
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⬇️ Checkout Scripts Repository
+        uses: actions/checkout@v4
+
+      - name: ⬇️ Checkout Data Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.DATA_REPOSITORY }}
+          token: ${{ secrets.PAT_TOKEN }}
+          path: 'data'
+          persist-credentials: true
+
+      - name: Make script executable
+        run: chmod +x scripts/archive_monthly.sh
+
+      - name: Run archive script
+        run: scripts/archive_monthly.sh data "${{ github.event.inputs.year }}" "${{ github.event.inputs.month }}" "${{ github.event.inputs.part }}"
+
+      - name: Commit and push archive
+        run: |
+          set -euo pipefail
+          cd data
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A || true
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          
+          # 计算归档区间标识用于提交信息
+          MANUAL_YEAR="${{ github.event.inputs.year }}"
+          MANUAL_MONTH="${{ github.event.inputs.month }}"
+          MANUAL_PART="${{ github.event.inputs.part }}"
+          
+          current_day=$(TZ='Asia/Shanghai' date +%d)
+          current_year=$(TZ='Asia/Shanghai' date +%Y)
+          current_month=$(TZ='Asia/Shanghai' date +%m)
+
+          if [ $((10#$current_day)) -le 15 ]; then
+            current_15th=$(TZ='Asia/Shanghai' date +%Y-%m-15)
+            last_month_date=$(TZ='Asia/Shanghai' date -d "$current_15th -1 month" +%Y-%m)
+            default_year="${last_month_date%%-*}"
+            default_month="${last_month_date##*-}"
+            default_part="16-end"
+          else
+            default_year="$current_year"
+            default_month="$current_month"
+            default_part="01-15"
+          fi
+          
+          YEAR="${MANUAL_YEAR:-$default_year}"
+          MONTH="${MANUAL_MONTH:-$default_month}"
+          PART="${MANUAL_PART:-$default_part}"
+          
+          git commit -m "Archive backups for ${YEAR}-${MONTH}-${PART}"
+          git push
+
+      # Note: If your branch protection rules block pushes from GITHUB_TOKEN,
+      # create a personal access token (PAT) with `repo` scope, add it as
+      # repository secret (e.g. PERSONAL_TOKEN), then replace the remote URL above with:
+      # git remote set-url origin "https://x-access-token:${{ secrets.PERSONAL_TOKEN }}@github.com/${{ github.repository }}"
