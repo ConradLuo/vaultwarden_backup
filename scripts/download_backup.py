@@ -52,9 +52,20 @@ def main():
         try:
             with urllib.request.urlopen(req, timeout=60) as response:
                 with open(tmp_file, "wb") as out_file:
-                    out_file.write(response.read())
+                    # 流式分块写入，避免将整个大备份文件一次性读入内存
+                    for chunk in iter(lambda: response.read(65536), b""):
+                        out_file.write(chunk)
             success = True
             break
+        except urllib.error.HTTPError as e:
+            # 4xx 客户端错误（如 401 鉴权失效、404 链接失效）是确定性失败，
+            # 重试无意义，直接终止；仅 5xx 等服务端错误才值得重试。
+            if 400 <= e.code < 500:
+                print(f"HTTP {e.code} client error — not retrying: {e}")
+                break
+            print(f"Attempt {attempt} failed: HTTP {e.code} {e}")
+            if attempt < max_retries:
+                time.sleep(retry_delay)
         except urllib.error.URLError as e:
             print(f"Attempt {attempt} failed: {e}")
             if attempt < max_retries:
@@ -74,61 +85,63 @@ def main():
             os.remove(tmp_file)
         sys.exit(1)
 
-    # 验证 ZIP 包完整性与加密安全性
-    print("Verifying ZIP file integrity and encryption security...")
+    # 校验、去重与落盘阶段：统一用 finally 兜底清理残留的 .tmp 文件，
+    # 避免任何异常路径（如非预期的 RuntimeError）导致临时文件遗留。
     try:
-        with zipfile.ZipFile(tmp_file) as zf:
-            # 安全性校验：确保压缩包内的所有文件（排除目录项）都已经被加密
-            unencrypted_files = []
-            for zinfo in zf.infolist():
-                if not zinfo.is_dir() and not (zinfo.flag_bits & 0x1):
-                    unencrypted_files.append(zinfo.filename)
-            
-            if unencrypted_files:
-                print("Security Error: The downloaded backup ZIP contains UNENCRYPTED files!")
-                print(f"Unencrypted file(s) detected: {unencrypted_files[:5]} ... (total {len(unencrypted_files)})")
-                print("为了您的密码隐私安全，已自动拦截该非加密备份，已终止后续的提交与推送。")
-                os.remove(tmp_file)
-                sys.exit(1)
+        # 验证 ZIP 包完整性与加密安全性
+        print("Verifying ZIP file integrity and encryption security...")
+        try:
+            with zipfile.ZipFile(tmp_file) as zf:
+                # 安全性校验：确保压缩包内的所有文件（排除目录项）都已经被加密
+                unencrypted_files = []
+                for zinfo in zf.infolist():
+                    if not zinfo.is_dir() and not (zinfo.flag_bits & 0x1):
+                        unencrypted_files.append(zinfo.filename)
 
-            # 既然所有文件均已加密，testzip() 在无密码时必定抛出 RuntimeError
-            try:
-                bad_file = zf.testzip()
-                if bad_file is not None:
-                    print(f"Error: Corrupt file inside ZIP: {bad_file}")
-                    os.remove(tmp_file)
+                if unencrypted_files:
+                    print("Security Error: The downloaded backup ZIP contains UNENCRYPTED files!")
+                    print(f"Unencrypted file(s) detected: {unencrypted_files[:5]} ... (total {len(unencrypted_files)})")
+                    print("为了您的密码隐私安全，已自动拦截该非加密备份，已终止后续的提交与推送。")
                     sys.exit(1)
-            except RuntimeError as e:
-                if "encrypted" in str(e) or "password required" in str(e):
-                    print("ZIP encryption verified. Basic structural check passed.")
-                else:
-                    raise e
-    except zipfile.BadZipFile:
-        print("Error: Downloaded file is not a valid ZIP archive.")
+
+                # 既然所有文件均已加密，testzip() 在无密码时必定抛出 RuntimeError
+                try:
+                    bad_file = zf.testzip()
+                    if bad_file is not None:
+                        print(f"Error: Corrupt file inside ZIP: {bad_file}")
+                        sys.exit(1)
+                except RuntimeError as e:
+                    if "encrypted" in str(e) or "password required" in str(e):
+                        print("ZIP encryption verified. Basic structural check passed.")
+                    else:
+                        raise e
+        except zipfile.BadZipFile:
+            print("Error: Downloaded file is not a valid ZIP archive.")
+            sys.exit(1)
+
+        print("ZIP file integrity verification passed.")
+
+        # SHA256 比较去重
+        if os.path.exists(target_path):
+            new_sum = get_sha256(tmp_file)
+            old_sum = get_sha256(target_path)
+            if new_sum == old_sum:
+                print(f"Downloaded file identical to existing {target_path} — skipping move and commit.")
+                # 写入 GitHub Actions 环境变量以跳过后续步骤中的 Git 提交
+                github_env = os.environ.get('GITHUB_ENV')
+                if github_env:
+                    with open(github_env, 'a') as ge:
+                        ge.write("SKIP_COMMIT=true\n")
+                sys.exit(0)
+
+        # 覆盖目标文件
+        if os.path.exists(target_path):
+            os.remove(target_path)
+        os.rename(tmp_file, target_path)
+    finally:
+        # rename 成功后 tmp_file 已不存在；其余任何提前退出/异常路径在此清理
         if os.path.exists(tmp_file):
             os.remove(tmp_file)
-        sys.exit(1)
-
-    print("ZIP file integrity verification passed.")
-
-    # SHA256 比较去重
-    if os.path.exists(target_path):
-        new_sum = get_sha256(tmp_file)
-        old_sum = get_sha256(target_path)
-        if new_sum == old_sum:
-            print(f"Downloaded file identical to existing {target_path} — skipping move and commit.")
-            os.remove(tmp_file)
-            # 写入 GitHub Actions 环境变量以跳过后续步骤中的 Git 提交
-            github_env = os.environ.get('GITHUB_ENV')
-            if github_env:
-                with open(github_env, 'a') as ge:
-                    ge.write("SKIP_COMMIT=true\n")
-            sys.exit(0)
-
-    # 覆盖目标文件
-    if os.path.exists(target_path):
-        os.remove(target_path)
-    os.rename(tmp_file, target_path)
     print(f"Saved to {target_path}")
 
 if __name__ == "__main__":

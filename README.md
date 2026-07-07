@@ -74,7 +74,9 @@
      - `DOWNLOAD_URL`：您的固定下载链接（例如: `https://my-nas.com/vaultwarden_backup/vaultwarden.zip` 或带 Token 的链接）
      - `PAT_TOKEN`：刚才生成的 PAT 密钥
      - `DATA_REPOSITORY`：您的私有数据仓库路径（例如: `ConradLuo/vaultwarden_backup_data`）
-     - `ORIGINAL_FILENAME`：备份压缩包在仓库中存储的基础文件名（选填，默认为 `vaultwarden`）
+     - `BARK_URL`（选填）：[Bark](https://github.com/Finb/Bark) 推送地址（形如 `https://api.day.app/YOUR_KEY`）。配置后，每日备份任务**失败时**会自动向您的 iOS 设备推送告警（含日志链接）；不配置则跳过通知，不影响主流程。
+   - **Variables (变量)** 选项卡中，点击 `New repository variable` 添加（选填）：
+     - `ORIGINAL_FILENAME`：备份压缩包在仓库中存储的基础文件名（默认为 `vaultwarden`）。此字段非机密，故用 Variable 而非 Secret；若您已将其配置为 Secret，工作流仍会兼容读取。
 
 4. **立即触发测试**：
    在 `Actions` 标签页，选中对应的 Workflow，手动点击 `Run workflow` 即可立即触发备份下载。
@@ -91,7 +93,7 @@
 1. **配置文件路径**：
    打开并修改 [scripts/vaultwarden_backup.sh](scripts/vaultwarden_backup.sh)，将 `WORKING_DIR` 变量修改为您本地 Vaultwarden 源目录所在的父目录路径。
 2. **设置加密密码（建议）**：
-   在运行环境或脚本中设置环境变量 `VW_BACKUP_PASSWORD`，脚本会使用 `7z` 自动加密打包您的数据（默认生成 `vaultwarden.zip`）。
+   在运行环境或脚本中设置环境变量 `VW_BACKUP_PASSWORD`，脚本会使用 `7z` 以 **AES-256** 加密打包您的数据（默认生成 `vaultwarden.zip`，兼容云端 `zipfile` 校验）。
 3. **运行备份**：
    赋予执行权限并运行根目录下的快捷包装脚本即可：
    ```bash

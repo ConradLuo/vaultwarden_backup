@@ -18,7 +18,8 @@ jobs:
       DOWNLOAD_URL: ${{ secrets.DOWNLOAD_URL }}
       DATA_REPOSITORY: ${{ secrets.DATA_REPOSITORY }}
       PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
-      ORIGINAL_FILENAME: ${{ secrets.ORIGINAL_FILENAME || 'vaultwarden' }}
+      ORIGINAL_FILENAME: ${{ vars.ORIGINAL_FILENAME || secrets.ORIGINAL_FILENAME || 'vaultwarden' }}
+      BARK_URL: ${{ secrets.BARK_URL }}
 
     steps:
       - name: ⬇️ Checkout Scripts Repository
@@ -122,3 +123,20 @@ jobs:
           else
             echo "No changes to commit."
           fi
+
+      - name: 🔔 Notify on Failure (Bark)
+        if: ${{ failure() && env.BARK_URL != '' }}
+        run: |
+          set -euo pipefail
+          # BARK_URL 形如 https://api.day.app/YOUR_KEY
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TITLE="Vaultwarden 备份失败"
+          BODY="仓库 ${{ github.repository }} 的每日备份任务失败，请检查下载链接或 Token。查看日志: $RUN_URL"
+          # 去除 BARK_URL 结尾可能存在的斜杠，避免出现双斜杠
+          BASE="${BARK_URL%/}"
+          curl -fsS -X POST "$BASE" \
+            --data-urlencode "title=$TITLE" \
+            --data-urlencode "body=$BODY" \
+            --data-urlencode "group=vaultwarden_backup" \
+            --data-urlencode "level=timeSensitive" \
+            || echo "Bark 通知发送失败（不影响主流程结果）。"

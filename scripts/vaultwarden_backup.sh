@@ -47,9 +47,11 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # 3. 创建 7z 压缩文件
-zip_opts=("a")
+# 输出 zip 格式（-tzip）以便云端 Python zipfile 校验；
+# 加密时使用 AES-256（-mem=AES256），避免 zip 默认的弱 ZipCrypto。
+zip_opts=("a" "-tzip")
 if [ -n "$PASSWORD" ]; then
-    zip_opts+=("-p$PASSWORD")
+    zip_opts+=("-mem=AES256" "-p$PASSWORD")
 else
     echo "警告: 未设置加密密码 (VW_BACKUP_PASSWORD)，备份将不加密。" >&2
 fi
