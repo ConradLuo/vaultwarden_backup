@@ -53,7 +53,6 @@ jobs:
             exit 1
           fi
 
-          # 使用北京时间 (Asia/Shanghai)
           YEAR=$(TZ='Asia/Shanghai' date +'%Y')
           MONTH=$(TZ='Asia/Shanghai' date +'%m')
           CURRENT_DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d')
@@ -102,7 +101,6 @@ jobs:
 
           FILE_PATH="${{ env.TARGET_PATH }}"
 
-          # 获取元数据信息用于 Commit 信息中
           FILE_SIZE_BYTES=$(wc -c < "$FILE_PATH")
           if [ "$FILE_SIZE_BYTES" -ge 1048576 ]; then
             FILE_SIZE=$(echo "$FILE_SIZE_BYTES" | awk '{printf "%.2f MB", $1/1048576}')
@@ -111,7 +109,6 @@ jobs:
           fi
           SHA256_SUM=$(sha256sum "$FILE_PATH" | awk '{print $1}')
 
-          # 添加文件并仅当仓库有变化时提交
           git add "$FILE_PATH" || true
 
           if ! git diff-index --quiet HEAD --; then
@@ -124,15 +121,84 @@ jobs:
             echo "No changes to commit."
           fi
 
+      - name: 📝 Update README Daily Status
+        if: always()
+        env:
+          WORKFLOW_STATUS: ${{ job.status }}
+        run: |
+          python - <<'PY'
+          import os
+          from datetime import datetime, timedelta, timezone
+          from pathlib import Path
+
+          repo_status = os.environ.get('WORKFLOW_STATUS', 'success')
+          status_map = {
+              'success': '✅ 成功',
+              'failure': '❌ 失败',
+              'cancelled': '⏹️ 已取消',
+          }
+          status_text = status_map.get(repo_status, '⚠️ 未知')
+
+          tz = timezone(timedelta(hours=8))
+          now = datetime.now(tz)
+          date_str = now.strftime('%Y-%m-%d')
+          time_str = now.strftime('%H:%M:%S')
+
+          block = (
+              "## 📊 今日执行状态\n\n"
+              f"- 日期：{date_str}\n"
+              f"- 状态：{status_text}\n"
+              f"- 最后更新：{date_str} {time_str} (北京时间)\n"
+              "- 说明：此状态由 GitHub Actions 自动更新，每次执行后刷新当天状态。\n"
+          )
+
+          readme = Path('README.md')
+          if not readme.exists():
+              readme.write_text(block + '\n', encoding='utf-8')
+              raise SystemExit(0)
+
+          content = readme.read_text(encoding='utf-8')
+          marker = '## 📊 今日执行状态'
+
+          if marker in content:
+              start = content.index(marker)
+              end = content.find('\n\n本项目使用', start)
+              if end == -1:
+                  end = content.find('\n---\n\n## ⚠️', start)
+              if end == -1:
+                  end = len(content)
+              content = content[:start] + block + '\n' + content[end:]
+          else:
+              badge_marker = '\n[![Daily Backup Status]'
+              if badge_marker in content:
+                  content = content.replace(badge_marker, badge_marker + '\n\n' + block + '\n', 1)
+              else:
+                  content = block + '\n' + content
+
+          readme.write_text(content, encoding='utf-8')
+          PY
+
+      - name: 📤 Commit README status update
+        if: always()
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if git diff --cached --quiet; then
+            echo "README status unchanged."
+            exit 0
+          fi
+          git commit -m "docs: update daily execution status"
+          git push
+
       - name: 🔔 Notify on Failure (Bark)
         if: ${{ failure() && env.BARK_URL != '' }}
         run: |
           set -euo pipefail
-          # BARK_URL 形如 https://api.day.app/YOUR_KEY
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           TITLE="Vaultwarden 备份失败"
           BODY="仓库 ${{ github.repository }} 的每日备份任务失败，请检查下载链接或 Token。查看日志: $RUN_URL"
-          # 去除 BARK_URL 结尾可能存在的斜杠，避免出现双斜杠
           BASE="${BARK_URL%/}"
           curl -fsS -X POST "$BASE" \
             --data-urlencode "title=$TITLE" \
